@@ -1,0 +1,127 @@
+free c: channel.
+free cc: channel.
+free sc: channel[private].
+
+
+
+type client_sk_dsa.
+type client_pk_dsa.
+fun KGen_client_dsa(client_sk_dsa) : client_pk_dsa.
+
+type server_sk_dsa.
+type server_pk_dsa.
+fun KGen_server_dsa(server_sk_dsa) : server_pk_dsa.
+
+
+type G.
+type ecc_exponent.
+
+const g: G.
+fun ecc(G, ecc_exponent): G.
+equation forall x: ecc_exponent, y: ecc_exponent; ecc(ecc(g, x), y) = ecc(ecc(g, y), x).
+
+fun kdf(G): bitstring.
+
+fun sign_client(client_sk_dsa, bitstring) : bitstring.
+reduc forall m: bitstring, client_sk_dsa: client_sk_dsa; client_verify(sign_client(client_sk_dsa, m), KGen_client_dsa(client_sk_dsa), m) = true.
+
+fun sign_server(server_sk_dsa, bitstring) : bitstring.
+reduc forall m: bitstring, server_sk_dsa: server_sk_dsa; server_verify(sign_server(server_sk_dsa, m), KGen_server_dsa(server_sk_dsa), m) = true.
+
+
+fun AE_ENC(bitstring, bitstring):bitstring.
+reduc forall m: bitstring, key: bitstring; AE_DEC(key, AE_ENC(key, m)) = m.
+
+
+
+
+
+
+event Server_accept_Client(bitstring,client_pk_dsa).
+event end_client(bitstring,client_pk_dsa).
+query x:bitstring, y:client_pk_dsa; inj-event (end_client(x,y)) ==> inj-event (Server_accept_Client(x,y)).
+
+
+event Client_accept_Server(bitstring,server_pk_dsa).
+event end_Server(bitstring,server_pk_dsa).
+query x:bitstring, y:server_pk_dsa; inj-event (end_Server(x,y)) ==> inj-event (Client_accept_Server(x,y)).
+
+(* query x:bitstring, y:server_pk_dsa; event (end_Server(x,y)).
+query x:bitstring, y:client_pk_dsa; event (end_client(x,y)). *)
+
+free secrect_information:bitstring[private].
+(* query attacker(secrect_information). *)
+
+event check.
+(* query event (check). *)
+
+free UID:bitstring[private].
+(* query attacker(UID). *)
+
+free sk:bitstring[private].
+query attacker(sk).
+
+
+
+let Client(client_sk_dsa:client_sk_dsa, client_pk_dsa:client_pk_dsa, server_pk_dsa:server_pk_dsa) =
+    (* receive message m1 *)
+    in (c, (server_sig:bitstring, g_h:G, x:bitstring));
+    if server_verify(server_sig, server_pk_dsa, (g_h, x)) then
+    new u:ecc_exponent;
+    let key = kdf(ecc(g_h, u)) in
+    let (lamuda:bitstring) = AE_DEC(sk, x) in
+    (* if UID_Dec = UID then *)
+    event Client_accept_Server(key, server_pk_dsa);
+    new mu:bitstring;
+    let g_u = ecc(g, u) in
+    new TID:bitstring;
+    let client_sig = sign_client(client_sk_dsa, (g_u, AE_ENC(key, (UID, mu)), TID)) in
+    (* send message m2 *)
+    out (c, (client_sig, g_u, AE_ENC(key, (UID, mu)), TID));
+    (* receive message m3 *)
+    in (c, x:bitstring);
+    let (TID_dec:bitstring, index:bitstring) = AE_DEC(key, x) in
+    if TID_dec = TID then
+
+    event end_client(key, client_pk_dsa);
+    (* event check; *)
+    0.
+
+
+let Server(server_sk_dsa:server_sk_dsa, server_pk_dsa:server_pk_dsa, client_pk_dsa:client_pk_dsa) =
+
+    new h:ecc_exponent;
+    let g_h = ecc(g, h) in
+    new lamuda:bitstring;
+    let server_sig = sign_server(server_sk_dsa, (g_h, AE_ENC(sk, (lamuda)))) in
+    (* send message m1 *)
+    out (c, (server_sig, g_h, AE_ENC(sk, (lamuda))));
+    (* receive message m2 *)
+    in (c, (client_sig:bitstring, g_u:G, x:bitstring, TID:bitstring));
+    if client_verify(client_sig, client_pk_dsa, (g_u, x, TID)) then
+    let key = kdf(ecc(g_u, h)) in
+    let (UID_Dec:bitstring, mu:bitstring) = AE_DEC(key, x) in
+    if UID_Dec = UID then
+    event Server_accept_Client(key, client_pk_dsa);
+    new index:bitstring;
+    (* send message m3 *)
+    out (c, AE_ENC(key, (TID, index)));
+
+    event end_Server(key, server_pk_dsa);
+    (* event check; *)
+    0.
+
+
+
+
+
+
+process
+
+    new client_sk_dsa:client_sk_dsa;
+    let client_pk_dsa = KGen_client_dsa(client_sk_dsa) in
+
+    new server_sk_dsa:server_sk_dsa;
+    let server_pk_dsa = KGen_server_dsa(server_sk_dsa) in
+
+    (!Client(client_sk_dsa, client_pk_dsa, server_pk_dsa) | !Server(server_sk_dsa, server_pk_dsa, client_pk_dsa)| phase 1 ; out ( c , sk ))
